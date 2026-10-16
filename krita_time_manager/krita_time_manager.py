@@ -1,6 +1,15 @@
+"""Krita Time Manager: docker with clock, stopwatch and countdown timer.
+
+Structure:
+    Constants -> Enums -> Helper -> Tab classes (Clock / Stopwatch / Timer)
+    -> TimeManager docker -> plugin registration.
+"""
+
 import math
 import os
 import time
+from enum import Enum, auto
+from typing import Optional
 
 from PyQt5 import uic
 from PyQt5.QtCore import QDate, QTime, QTimer
@@ -9,7 +18,32 @@ from PyQt5.QtWidgets import QApplication, QWidget
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
 
 
-def format_seconds(total):
+# --- Constants ---
+
+CLOCK_UPDATE_MS = 1000
+UI_TICK_MS = 100
+BLINK_INTERVAL_MS = 500
+BLINK_STYLE = "color: #e74c3c;"
+
+
+# --- Enums ---
+
+class StopwatchState(Enum):
+    STOPPED = auto()
+    RUNNING = auto()
+    PAUSED = auto()
+
+
+class TimerState(Enum):
+    IDLE = auto()
+    RUNNING = auto()
+    PAUSED = auto()
+    FINISHED = auto()
+
+
+# --- Helpers ---
+
+def format_seconds(total: float) -> str:
     """Seconds -> "hh:mm:ss" string."""
     total = int(total)
     hours = total // 3600
@@ -18,13 +52,199 @@ def format_seconds(total):
     return "{:02d}:{:02d}:{:02d}".format(hours, minutes, seconds)
 
 
-class TimeManager(DockWidget):
+# --- Clock tab ---
 
-    def __init__(self):
+class ClockTab:
+    """Shows the current time and date."""
+
+    def __init__(self, ui: QWidget) -> None:
+        self.ui = ui
+        self.tick_timer = QTimer()
+        self.tick_timer.timeout.connect(self.update)
+        self.tick_timer.start(CLOCK_UPDATE_MS)
+        self.update()
+
+    def update(self) -> None:
+        self.ui.clockLabel.setText(QTime.currentTime().toString("hh:mm:ss"))
+        self.ui.dateLabel.setText(QDate.currentDate().toString("dddd, dd MMMM yyyy"))
+
+
+# --- Stopwatch tab ---
+
+class StopwatchTab:
+    """Counts time up. Start/Pause toggles, Reset clears."""
+
+    def __init__(self, ui: QWidget) -> None:
+        self.ui = ui
+        self.state = StopwatchState.STOPPED
+        self.accumulated = 0.0
+        self.started_at: Optional[float] = None
+
+        self.ui.swStartButton.clicked.connect(self.on_start_clicked)
+        self.ui.swResetButton.clicked.connect(self.on_reset_clicked)
+
+        self.tick_timer = QTimer()
+        self.tick_timer.timeout.connect(self.update_display)
+        self.tick_timer.start(UI_TICK_MS)
+
+        self.update_display()
+
+    def elapsed(self) -> float:
+        """Elapsed seconds, computed from the monotonic clock."""
+        if self.state == StopwatchState.RUNNING:
+            return self.accumulated + (time.monotonic() - self.started_at)
+        return self.accumulated
+
+    def on_start_clicked(self) -> None:
+        if self.state == StopwatchState.RUNNING:
+            self.accumulated = self.elapsed()
+            self.started_at = None
+            self.state = StopwatchState.PAUSED
+        else:
+            self.started_at = time.monotonic()
+            self.state = StopwatchState.RUNNING
+        self.update_buttons()
+        self.update_display()
+
+    def on_reset_clicked(self) -> None:
+        self.accumulated = 0.0
+        self.started_at = None
+        self.state = StopwatchState.STOPPED
+        self.update_buttons()
+        self.update_display()
+
+    def update_display(self) -> None:
+        self.ui.stopwatchLabel.setText(format_seconds(self.elapsed()))
+
+    def update_buttons(self) -> None:
+        if self.state == StopwatchState.RUNNING:
+            self.ui.swStartButton.setText("Pause")
+        else:
+            self.ui.swStartButton.setText("Start")
+
+
+# --- Timer tab ---
+
+class TimerTab:
+    """Counts time down. Start/Pause toggles, Reset restores the input duration."""
+
+    def __init__(self, ui: QWidget) -> None:
+        self.ui = ui
+        self.state = TimerState.IDLE
+        self.remaining = 0.0
+        self.deadline: Optional[float] = None
+        self.blink_on = False
+
+        self.ui.timerStartButton.clicked.connect(self.on_start_clicked)
+        self.ui.timerResetButton.clicked.connect(self.on_reset_clicked)
+        self.ui.timerHoursSpin.valueChanged.connect(self.on_input_changed)
+        self.ui.timerMinutesSpin.valueChanged.connect(self.on_input_changed)
+        self.ui.timerSecondsSpin.valueChanged.connect(self.on_input_changed)
+
+        self.blink_timer = QTimer()
+        self.blink_timer.timeout.connect(self.on_blink)
+
+        self.tick_timer = QTimer()
+        self.tick_timer.timeout.connect(self.on_tick)
+        self.tick_timer.start(UI_TICK_MS)
+
+        self.update_display()
+
+    def read_input(self) -> int:
+        """Duration from the spinboxes, in seconds."""
+        return (self.ui.timerHoursSpin.value() * 3600 +
+                self.ui.timerMinutesSpin.value() * 60 +
+                self.ui.timerSecondsSpin.value())
+
+    def seconds_left(self) -> float:
+        """Seconds left in the current state."""
+        if self.state == TimerState.RUNNING:
+            return max(0.0, self.deadline - time.monotonic())
+        if self.state == TimerState.IDLE:
+            return float(self.read_input())
+        return self.remaining
+
+    def on_start_clicked(self) -> None:
+        if self.state == TimerState.RUNNING:
+            self.remaining = self.seconds_left()
+            self.deadline = None
+            self.state = TimerState.PAUSED
+        elif self.state == TimerState.IDLE:
+            duration = self.read_input()
+            if duration <= 0:
+                return
+            self.remaining = float(duration)
+            self.deadline = time.monotonic() + self.remaining
+            self.state = TimerState.RUNNING
+        elif self.state == TimerState.PAUSED:
+            if self.remaining <= 0:
+                return
+            self.stop_blinking()
+            self.deadline = time.monotonic() + self.remaining
+            self.state = TimerState.RUNNING
+        else:
+            return
+        self.update_buttons()
+        self.update_display()
+
+    def on_reset_clicked(self) -> None:
+        self.deadline = None
+        self.remaining = 0.0
+        self.state = TimerState.IDLE
+        self.stop_blinking()
+        self.update_buttons()
+        self.update_display()
+
+    def on_tick(self) -> None:
+        if (self.state == TimerState.RUNNING
+                and time.monotonic() >= self.deadline):
+            self.on_finished()
+        self.update_display()
+
+    def on_finished(self) -> None:
+        self.deadline = None
+        self.remaining = 0.0
+        self.state = TimerState.FINISHED
+        self.update_buttons()
+        QApplication.beep()
+        self.blink_timer.start(BLINK_INTERVAL_MS)
+        self.update_display()
+
+    def on_input_changed(self, _value: int) -> None:
+        if self.state == TimerState.IDLE:
+            self.update_display()
+
+    def on_blink(self) -> None:
+        self.blink_on = not self.blink_on
+        if self.blink_on:
+            self.ui.timerLabel.setStyleSheet(BLINK_STYLE)
+        else:
+            self.ui.timerLabel.setStyleSheet("")
+
+    def stop_blinking(self) -> None:
+        self.blink_timer.stop()
+        self.blink_on = False
+        self.ui.timerLabel.setStyleSheet("")
+
+    def update_display(self) -> None:
+        self.ui.timerLabel.setText(format_seconds(math.ceil(self.seconds_left())))
+
+    def update_buttons(self) -> None:
+        if self.state == TimerState.RUNNING:
+            self.ui.timerStartButton.setText("Pause")
+        else:
+            self.ui.timerStartButton.setText("Start")
+
+
+# --- Docker ---
+
+class TimeManager(DockWidget):
+    """Docker that assembles the three tabs."""
+
+    def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Krita Time Manager")
 
-        # --- Container and .ui loading ---
         self.widget = QWidget(self)
         ui_path = os.path.join(
             os.path.dirname(os.path.realpath(__file__)),
@@ -33,155 +253,16 @@ class TimeManager(DockWidget):
         uic.loadUi(ui_path, self.widget)
         self.setWidget(self.widget)
 
-        # --- Clock ---
-        self.clock_timer = QTimer()
-        self.clock_timer.timeout.connect(self.update_clock)
-        self.clock_timer.start(1000)
-        self.update_clock()
+        self.clock = ClockTab(self.widget)
+        self.stopwatch = StopwatchTab(self.widget)
+        self.timer = TimerTab(self.widget)
 
-        # --- Stopwatch ---
-        self.sw_accumulated = 0.0   # accumulated seconds (while paused)
-        self.sw_started_at = None   # start moment (time.monotonic) or None
-
-        # --- Timer ---
-        self.timer_remaining = None  # seconds left; None = never started
-        self.timer_deadline = None   # finish moment (time.monotonic) or None
-        self.timer_blink_on = False
-
-        # --- Display refresh (10 times per second) ---
-        self.tick_timer = QTimer()
-        self.tick_timer.timeout.connect(self.on_tick)
-        self.tick_timer.start(100)
-
-        # --- Blinking of the timer label when finished ---
-        self.blink_timer = QTimer()
-        self.blink_timer.timeout.connect(self.on_blink)
-
-        # --- Buttons ---
-        self.widget.swStartButton.clicked.connect(self.on_sw_start_click)
-        self.widget.swResetButton.clicked.connect(self.on_sw_reset_click)
-        self.widget.timerStartButton.clicked.connect(self.on_timer_start_click)
-        self.widget.timerResetButton.clicked.connect(self.on_timer_reset_click)
-
-        # --- Duration preview when spinboxes change ---
-        self.widget.timerHoursSpin.valueChanged.connect(self.on_timer_input_changed)
-        self.widget.timerMinutesSpin.valueChanged.connect(self.on_timer_input_changed)
-        self.widget.timerSecondsSpin.valueChanged.connect(self.on_timer_input_changed)
-
-        self.update_stopwatch_display()
-        self.update_timer_display()
-
-    # --- Clock ---
-
-    def update_clock(self):
-        self.widget.clockLabel.setText(QTime.currentTime().toString("hh:mm:ss"))
-        self.widget.dateLabel.setText(QDate.currentDate().toString("dddd, dd MMMM yyyy"))
-
-    # --- Common tick ---
-
-    def on_tick(self):
-        self.update_stopwatch_display()
-        if self.timer_deadline is not None and time.monotonic() >= self.timer_deadline:
-            self.on_timer_finished()
-        self.update_timer_display()
-
-    # --- Stopwatch ---
-
-    def stopwatch_elapsed(self):
-        if self.sw_started_at is not None:
-            return self.sw_accumulated + (time.monotonic() - self.sw_started_at)
-        return self.sw_accumulated
-
-    def update_stopwatch_display(self):
-        self.widget.stopwatchLabel.setText(format_seconds(self.stopwatch_elapsed()))
-
-    def on_sw_start_click(self):
-        if self.sw_started_at is None:
-            self.sw_started_at = time.monotonic()
-            self.widget.swStartButton.setText("Pause")
-        else:
-            self.sw_accumulated = self.stopwatch_elapsed()
-            self.sw_started_at = None
-            self.widget.swStartButton.setText("Start")
-        self.update_stopwatch_display()
-
-    def on_sw_reset_click(self):
-        self.sw_accumulated = 0.0
-        self.sw_started_at = None
-        self.widget.swStartButton.setText("Start")
-        self.update_stopwatch_display()
-
-    # --- Timer ---
-
-    def read_timer_input(self):
-        return (self.widget.timerHoursSpin.value() * 3600 +
-                self.widget.timerMinutesSpin.value() * 60 +
-                self.widget.timerSecondsSpin.value())
-
-    def update_timer_display(self):
-        if self.timer_deadline is not None:
-            left = max(0.0, self.timer_deadline - time.monotonic())
-        elif self.timer_remaining is not None:
-            left = self.timer_remaining
-        else:
-            left = self.read_timer_input()
-        self.widget.timerLabel.setText(format_seconds(math.ceil(left)))
-
-    def on_timer_input_changed(self, _value):
-        if self.timer_deadline is None and self.timer_remaining is None:
-            self.update_timer_display()
-
-    def on_timer_start_click(self):
-        if self.timer_deadline is not None:
-            self.timer_remaining = max(0.0, self.timer_deadline - time.monotonic())
-            self.timer_deadline = None
-            self.widget.timerStartButton.setText("Start")
-        else:
-            if self.timer_remaining is None:
-                duration = self.read_timer_input()
-                if duration <= 0:
-                    return
-                self.timer_remaining = float(duration)
-            self.stop_blinking()
-            self.timer_deadline = time.monotonic() + self.timer_remaining
-            self.widget.timerStartButton.setText("Pause")
-        self.update_timer_display()
-
-    def on_timer_reset_click(self):
-        self.timer_deadline = None
-        self.timer_remaining = None
-        self.stop_blinking()
-        self.widget.timerStartButton.setText("Start")
-        self.update_timer_display()
-
-    def on_timer_finished(self):
-        self.timer_deadline = None
-        self.timer_remaining = 0.0
-        self.widget.timerStartButton.setText("Start")
-        QApplication.beep()
-        self.blink_timer.start(500)
-        self.update_timer_display()
-
-    def on_blink(self):
-        self.timer_blink_on = not self.timer_blink_on
-        if self.timer_blink_on:
-            self.widget.timerLabel.setStyleSheet("color: #e74c3c;")
-        else:
-            self.widget.timerLabel.setStyleSheet("")
-
-    def stop_blinking(self):
-        if self.blink_timer.isActive():
-            self.blink_timer.stop()
-        self.timer_blink_on = False
-        self.widget.timerLabel.setStyleSheet("")
-
-    # --- Krita API ---
-
-    def canvasChanged(self, canvas):
+    def canvasChanged(self, canvas) -> None:
         pass
 
 
 # --- Plugin registration in Krita ---
+
 instance = Krita.instance()
 factory = DockWidgetFactory(
     'krita_time_manager',
