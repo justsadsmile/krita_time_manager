@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=krita_time_manager
+X-Python-2-Compatible=false
+Name=Krita Time Manager
+Comment=A simple tool to help with time tracking

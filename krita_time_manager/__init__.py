@@ -1,0 +1,1 @@
+from .krita_time_manager import TimeManager
