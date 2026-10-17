@@ -183,12 +183,11 @@ class StopwatchTab:
 # --- Timer tab ---
 
 class TimerTab:
-    """Counts time down. Start/Pause toggles, Reset restores the input duration."""
+    """Counts time down. Start/Pause toggles; while paused the pending time can be edited."""
 
     def __init__(self, ui: QWidget) -> None:
         self.ui = ui
         self.state = TimerState.IDLE
-        self.remaining = 0.0
         self.run_duration = 0.0
         self.deadline: Optional[float] = None
         self.blink_on = False
@@ -206,6 +205,7 @@ class TimerTab:
         self.tick_timer.timeout.connect(self.on_tick)
 
         self.update_buttons()
+        self.update_input_visibility()
         self.update_display()
 
     def read_input(self) -> int:
@@ -214,53 +214,64 @@ class TimerTab:
                 self.ui.timerMinutesSpin.value() * 60 +
                 self.ui.timerSecondsSpin.value())
 
+    def set_input(self, total: int) -> None:
+        """Write whole seconds back into the spinboxes."""
+        total = min(total, 99 * 3600 + 59 * 60 + 59)
+        hours, rest = divmod(total, 3600)
+        minutes, seconds = divmod(rest, 60)
+        self.ui.timerHoursSpin.setValue(hours)
+        self.ui.timerMinutesSpin.setValue(minutes)
+        self.ui.timerSecondsSpin.setValue(seconds)
+
     def seconds_left(self) -> float:
         """Seconds left in the current state."""
         if self.state == TimerState.RUNNING:
             return max(0.0, self.deadline - time.perf_counter())
-        if self.state == TimerState.IDLE:
-            return float(self.read_input())
-        return self.remaining
+        if self.state == TimerState.FINISHED:
+            return 0.0
+        return float(self.read_input())
 
     def on_start_clicked(self) -> None:
         if self.state == TimerState.RUNNING:
-            self.remaining = self.seconds_left()
-            if self.remaining <= 0:
+            left = self.seconds_left()
+            if left <= 0:
                 self.on_finished()
                 return
+            self.set_input(math.ceil(left))
             self.deadline = None
             self.state = TimerState.PAUSED
         elif self.state == TimerState.IDLE:
             duration = self.read_input()
             if duration <= 0:
                 return
-            self.remaining = float(duration)
-            self.run_duration = self.remaining
-            self.deadline = time.perf_counter() + self.remaining
+            self.run_duration = float(duration)
+            self.deadline = time.perf_counter() + duration
             self.state = TimerState.RUNNING
         elif self.state == TimerState.PAUSED:
-            if self.remaining <= 0:
+            duration = self.read_input()
+            if duration <= 0:
                 return
-            self.deadline = time.perf_counter() + self.remaining
+            self.run_duration = float(duration)
+            self.deadline = time.perf_counter() + duration
             self.state = TimerState.RUNNING
         elif self.state == TimerState.FINISHED:
             self.stop_blinking()
-            self.remaining = self.run_duration
-            self.deadline = time.perf_counter() + self.remaining
+            self.deadline = time.perf_counter() + self.run_duration
             self.state = TimerState.RUNNING
         else:
             return
         self.sync_tick_timer()
         self.update_buttons()
+        self.update_input_visibility()
         self.update_display()
 
     def on_reset_clicked(self) -> None:
         self.deadline = None
-        self.remaining = 0.0
         self.state = TimerState.IDLE
         self.stop_blinking()
         self.sync_tick_timer()
         self.update_buttons()
+        self.update_input_visibility()
         self.update_display()
 
     def on_tick(self) -> None:
@@ -272,16 +283,16 @@ class TimerTab:
 
     def on_finished(self) -> None:
         self.deadline = None
-        self.remaining = 0.0
         self.state = TimerState.FINISHED
         self.sync_tick_timer()
         self.update_buttons()
+        self.update_input_visibility()
         QApplication.beep()
         self.blink_timer.start(BLINK_INTERVAL_MS)
         self.update_display()
 
     def on_input_changed(self, _value: int) -> None:
-        if self.state == TimerState.IDLE:
+        if self.state in (TimerState.IDLE, TimerState.PAUSED):
             self.update_buttons()
             self.update_display()
 
@@ -304,6 +315,13 @@ class TimerTab:
         else:
             self.tick_timer.stop()
 
+    def update_input_visibility(self) -> None:
+        """Spinboxes are editable only in IDLE and PAUSED."""
+        visible = self.state in (TimerState.IDLE, TimerState.PAUSED)
+        self.ui.timerHoursSpin.setVisible(visible)
+        self.ui.timerMinutesSpin.setVisible(visible)
+        self.ui.timerSecondsSpin.setVisible(visible)
+
     def update_display(self) -> None:
         self.ui.timerLabel.setText(format_seconds(math.ceil(self.seconds_left())))
 
@@ -313,7 +331,7 @@ class TimerTab:
             self.ui.timerStartButton.setEnabled(True)
         elif self.state == TimerState.PAUSED:
             self.ui.timerStartButton.setText("Resume")
-            self.ui.timerStartButton.setEnabled(self.remaining > 0)
+            self.ui.timerStartButton.setEnabled(self.read_input() > 0)
         elif self.state == TimerState.FINISHED:
             self.ui.timerStartButton.setText("Restart")
             self.ui.timerStartButton.setEnabled(True)
