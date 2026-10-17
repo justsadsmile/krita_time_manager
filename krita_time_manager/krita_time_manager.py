@@ -128,10 +128,10 @@ class StopwatchTab:
         self.ui.swStartButton.clicked.connect(self.on_start_clicked)
         self.ui.swResetButton.clicked.connect(self.on_reset_clicked)
 
-        self.tick_timer = QTimer()
+        self.tick_timer = QTimer(self.ui)
         self.tick_timer.timeout.connect(self.update_display)
-        self.tick_timer.start(UI_TICK_MS)
 
+        self.update_buttons()
         self.update_display()
 
     def elapsed(self) -> float:
@@ -148,6 +148,7 @@ class StopwatchTab:
         else:
             self.started_at = time.perf_counter()
             self.state = StopwatchState.RUNNING
+        self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
 
@@ -155,8 +156,16 @@ class StopwatchTab:
         self.accumulated = 0.0
         self.started_at = None
         self.state = StopwatchState.STOPPED
+        self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
+
+    def sync_tick_timer(self) -> None:
+        """Repaint only while counting; on pause/stop the display is frozen."""
+        if self.state == StopwatchState.RUNNING:
+            self.tick_timer.start(UI_TICK_MS)
+        else:
+            self.tick_timer.stop()
 
     def update_display(self) -> None:
         self.ui.stopwatchLabel.setText(format_elapsed(self.elapsed()))
@@ -164,8 +173,11 @@ class StopwatchTab:
     def update_buttons(self) -> None:
         if self.state == StopwatchState.RUNNING:
             self.ui.swStartButton.setText("Pause")
+        elif self.state == StopwatchState.PAUSED:
+            self.ui.swStartButton.setText("Resume")
         else:
             self.ui.swStartButton.setText("Start")
+        self.ui.swResetButton.setEnabled(self.state != StopwatchState.STOPPED)
 
 
 # --- Timer tab ---
