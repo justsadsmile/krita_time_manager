@@ -54,6 +54,22 @@ def format_seconds(total: float) -> str:
     return "{:02d}:{:02d}:{:02d}".format(hours, minutes, seconds)
 
 
+def format_elapsed(total: float) -> str:
+    """Seconds -> progressive "h:mm:ss.t" / "m:ss.t" / "s.t" string
+
+    5.9 -> 59.9 -> 1:00.0
+    """
+    tenths = int(total * 10) 
+    hours, rest = divmod(tenths, 36000)
+    minutes, rest = divmod(rest, 600)
+    seconds, tenth = divmod(rest, 10)
+    if hours:
+        return "{}:{:02d}:{:02d}.{}".format(hours, minutes, seconds, tenth)
+    if minutes:
+        return "{}:{:02d}.{}".format(minutes, seconds, tenth)
+    return "{}.{}".format(seconds, tenth)
+
+
 # --- Clock tab ---
 
 class ClockTab:
@@ -121,7 +137,7 @@ class StopwatchTab:
     def elapsed(self) -> float:
         """Elapsed seconds, computed from the monotonic clock."""
         if self.state == StopwatchState.RUNNING:
-            return self.accumulated + (time.monotonic() - self.started_at)
+            return self.accumulated + (time.perf_counter() - self.started_at)
         return self.accumulated
 
     def on_start_clicked(self) -> None:
@@ -130,7 +146,7 @@ class StopwatchTab:
             self.started_at = None
             self.state = StopwatchState.PAUSED
         else:
-            self.started_at = time.monotonic()
+            self.started_at = time.perf_counter()
             self.state = StopwatchState.RUNNING
         self.update_buttons()
         self.update_display()
@@ -143,7 +159,7 @@ class StopwatchTab:
         self.update_display()
 
     def update_display(self) -> None:
-        self.ui.stopwatchLabel.setText(format_seconds(self.elapsed()))
+        self.ui.stopwatchLabel.setText(format_elapsed(self.elapsed()))
 
     def update_buttons(self) -> None:
         if self.state == StopwatchState.RUNNING:
