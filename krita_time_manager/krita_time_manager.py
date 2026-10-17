@@ -12,7 +12,7 @@ from enum import Enum, auto
 from typing import Optional
 
 from PyQt5 import uic
-from PyQt5.QtCore import QDate, QTime, QTimer
+from PyQt5.QtCore import QDate, QLocale, Qt, QTime, QTimer
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
@@ -20,10 +20,12 @@ from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
 
 # --- Constants ---
 
-CLOCK_UPDATE_MS = 1000
+CLOCK_UPDATE_MS = 1000 # MUST stay 1000 !!! DO NOT MAKE CHANGES WITHOUT MODIFYING class ClockTab:
 UI_TICK_MS = 100
 BLINK_INTERVAL_MS = 500
 BLINK_STYLE = "color: #e74c3c;"
+TIME_FORMAT = "hh:mm:ss"
+DATE_FORMAT = "dddd, dd MMMM yyyy"
 
 
 # --- Enums ---
@@ -55,18 +57,45 @@ def format_seconds(total: float) -> str:
 # --- Clock tab ---
 
 class ClockTab:
-    """Shows the current time and date."""
+    """Shows the current time and date, aligned to the second boundary.
+    
+    A one-shot precise timer re-arms itself on every tick, computing the
+    remaining time until the next .000 boundary, so the display never drifts.
+    """
+    #There are a lot of comments because I'm a little dumb
 
     def __init__(self, ui: QWidget) -> None:
         self.ui = ui
+
+        # Always format dates in English, regardless of system locale
+        self.locale = QLocale(QLocale.English)
+
+        # One-shot precise timer: each timeout re-arms the next tick
         self.tick_timer = QTimer()
-        self.tick_timer.timeout.connect(self.update)
-        self.tick_timer.start(CLOCK_UPDATE_MS)
+        self.tick_timer.setSingleShot(True)
+        self.tick_timer.setTimerType(Qt.PreciseTimer)  # ~1 ms vs ~50 ms default
+        self.tick_timer.timeout.connect(self.on_tick)
+
+        # Align the first tick to the next second boundary and render immediately
+        self.schedule_next_tick()
         self.update()
 
+    def on_tick(self) -> None:
+        """Called once per second: refresh the display and schedule the next ring."""
+        self.update()                # show the current time and date
+        self.schedule_next_tick()    # queue the next ring
+
+    def schedule_next_tick(self) -> None:
+        """Start the timer so it rings exactly at the next second boundary."""
+        # msec() is the milliseconds already elapsed in the current second
+        # so CLOCK_UPDATE_MS - msec() is the delay until the next boundary
+        delay_ms = CLOCK_UPDATE_MS - QTime.currentTime().msec()
+        self.tick_timer.start(delay_ms)
+
     def update(self) -> None:
-        self.ui.clockLabel.setText(QTime.currentTime().toString("hh:mm:ss"))
-        self.ui.dateLabel.setText(QDate.currentDate().toString("dddd, dd MMMM yyyy"))
+        """Write the current time and date into the labels."""
+        self.ui.clockLabel.setText(QTime.currentTime().toString(TIME_FORMAT))
+        self.ui.dateLabel.setText(self.locale.toString(QDate.currentDate(), DATE_FORMAT))
 
 
 # --- Stopwatch tab ---
