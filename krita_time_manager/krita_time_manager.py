@@ -189,6 +189,7 @@ class TimerTab:
         self.ui = ui
         self.state = TimerState.IDLE
         self.remaining = 0.0
+        self.run_duration = 0.0
         self.deadline: Optional[float] = None
         self.blink_on = False
 
@@ -198,13 +199,13 @@ class TimerTab:
         self.ui.timerMinutesSpin.valueChanged.connect(self.on_input_changed)
         self.ui.timerSecondsSpin.valueChanged.connect(self.on_input_changed)
 
-        self.blink_timer = QTimer()
+        self.blink_timer = QTimer(self.ui)
         self.blink_timer.timeout.connect(self.on_blink)
 
-        self.tick_timer = QTimer()
+        self.tick_timer = QTimer(self.ui)
         self.tick_timer.timeout.connect(self.on_tick)
-        self.tick_timer.start(UI_TICK_MS)
 
+        self.update_buttons()
         self.update_display()
 
     def read_input(self) -> int:
@@ -216,7 +217,7 @@ class TimerTab:
     def seconds_left(self) -> float:
         """Seconds left in the current state."""
         if self.state == TimerState.RUNNING:
-            return max(0.0, self.deadline - time.monotonic())
+            return max(0.0, self.deadline - time.perf_counter())
         if self.state == TimerState.IDLE:
             return float(self.read_input())
         return self.remaining
@@ -224,6 +225,9 @@ class TimerTab:
     def on_start_clicked(self) -> None:
         if self.state == TimerState.RUNNING:
             self.remaining = self.seconds_left()
+            if self.remaining <= 0:
+                self.on_finished()
+                return
             self.deadline = None
             self.state = TimerState.PAUSED
         elif self.state == TimerState.IDLE:
@@ -231,16 +235,22 @@ class TimerTab:
             if duration <= 0:
                 return
             self.remaining = float(duration)
-            self.deadline = time.monotonic() + self.remaining
+            self.run_duration = self.remaining
+            self.deadline = time.perf_counter() + self.remaining
             self.state = TimerState.RUNNING
         elif self.state == TimerState.PAUSED:
             if self.remaining <= 0:
                 return
+            self.deadline = time.perf_counter() + self.remaining
+            self.state = TimerState.RUNNING
+        elif self.state == TimerState.FINISHED:
             self.stop_blinking()
-            self.deadline = time.monotonic() + self.remaining
+            self.remaining = self.run_duration
+            self.deadline = time.perf_counter() + self.remaining
             self.state = TimerState.RUNNING
         else:
             return
+        self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
 
@@ -249,19 +259,22 @@ class TimerTab:
         self.remaining = 0.0
         self.state = TimerState.IDLE
         self.stop_blinking()
+        self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
 
     def on_tick(self) -> None:
         if (self.state == TimerState.RUNNING
-                and time.monotonic() >= self.deadline):
+                and time.perf_counter() >= self.deadline):
             self.on_finished()
+            return
         self.update_display()
 
     def on_finished(self) -> None:
         self.deadline = None
         self.remaining = 0.0
         self.state = TimerState.FINISHED
+        self.sync_tick_timer()
         self.update_buttons()
         QApplication.beep()
         self.blink_timer.start(BLINK_INTERVAL_MS)
@@ -269,6 +282,7 @@ class TimerTab:
 
     def on_input_changed(self, _value: int) -> None:
         if self.state == TimerState.IDLE:
+            self.update_buttons()
             self.update_display()
 
     def on_blink(self) -> None:
@@ -283,14 +297,30 @@ class TimerTab:
         self.blink_on = False
         self.ui.timerLabel.setStyleSheet("")
 
+    def sync_tick_timer(self) -> None:
+        """Repaint only while counting; on pause/finish the display is static."""
+        if self.state == TimerState.RUNNING:
+            self.tick_timer.start(UI_TICK_MS)
+        else:
+            self.tick_timer.stop()
+
     def update_display(self) -> None:
         self.ui.timerLabel.setText(format_seconds(math.ceil(self.seconds_left())))
 
     def update_buttons(self) -> None:
         if self.state == TimerState.RUNNING:
             self.ui.timerStartButton.setText("Pause")
+            self.ui.timerStartButton.setEnabled(True)
+        elif self.state == TimerState.PAUSED:
+            self.ui.timerStartButton.setText("Resume")
+            self.ui.timerStartButton.setEnabled(self.remaining > 0)
+        elif self.state == TimerState.FINISHED:
+            self.ui.timerStartButton.setText("Restart")
+            self.ui.timerStartButton.setEnabled(True)
         else:
             self.ui.timerStartButton.setText("Start")
+            self.ui.timerStartButton.setEnabled(self.read_input() > 0)
+        self.ui.timerResetButton.setEnabled(self.state != TimerState.IDLE)
 
 
 # --- Docker ---
