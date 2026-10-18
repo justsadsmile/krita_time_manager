@@ -28,15 +28,15 @@ TIME_FORMAT = "hh:mm:ss"
 DATE_FORMAT = "dddd, dd MMMM yyyy"
 PANEL_DARKEN = 115
 
-SWEEP_PERIOD_S = 5.0
+SWEEP_PERIOD_S = 4.0
 RING_UPDATE_MS = 16
 RING_TRACK_LIGHTEN = 125
 RING_EDGE_PAD = 4
 RING_TEXT_PAD = 20
-RING_PEN_RATIO = 0.06
-RING_PEN_MIN = 6
-RING_PEN_MAX = 14
-RING_DOT_RATIO = 1.6
+RING_PEN_RATIO = 0.05
+RING_PEN_MIN = 5
+RING_PEN_MAX = 12
+RING_DOT_RATIO = 1.9
 
 
 # --- Enums ---
@@ -264,7 +264,7 @@ class StopwatchTab:
         self.ui.stopwatchLabel.setText(format_elapsed(self.elapsed()))
 
     def update_ring(self) -> None:
-        """Dot angle from elapsed time: 5 s per revolution, drift-free."""
+        """Dot angle from elapsed time: SWEEP_PERIOD_S seconds per revolution."""
         self.ring.set_angle(
             self.elapsed() % SWEEP_PERIOD_S / SWEEP_PERIOD_S * 360.0
         )
