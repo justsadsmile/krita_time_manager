@@ -12,9 +12,9 @@ from enum import Enum, auto
 from typing import Optional
 
 from PyQt5 import uic
-from PyQt5.QtCore import QDate, QLocale, Qt, QTime, QTimer
-from PyQt5.QtGui import QPalette
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt5.QtCore import QDate, QLocale, QPointF, Qt, QTime, QTimer
+from PyQt5.QtGui import QPainter, QPalette, QPen
+from PyQt5.QtWidgets import QApplication, QSizePolicy, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
 
@@ -27,6 +27,16 @@ FINISHED_STYLE = "color: #e74c3c;"
 TIME_FORMAT = "hh:mm:ss"
 DATE_FORMAT = "dddd, dd MMMM yyyy"
 PANEL_DARKEN = 115
+
+SWEEP_PERIOD_S = 5.0
+RING_UPDATE_MS = 16
+RING_TRACK_LIGHTEN = 125
+RING_EDGE_PAD = 4
+RING_TEXT_PAD = 20
+RING_PEN_RATIO = 0.06
+RING_PEN_MIN = 6
+RING_PEN_MAX = 14
+RING_DOT_RATIO = 1.6
 
 
 # --- Enums ---
@@ -81,6 +91,58 @@ def style_panels(ui: QWidget) -> None:
         )
         page.setPalette(palette)
         page.setAutoFillBackground(True)
+
+
+# --- Sweep ring ---
+
+class SweepRing(QWidget):
+    """Decorative dot orbiting a ring; colors follow the Krita theme palette."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.angle = 0.0
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def set_angle(self, angle: float) -> None:
+        """Place the dot at the given angle: 0 = top, growing clockwise."""
+        self.angle = angle % 360.0
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        diameter = min(self.width(), self.height()) - 2 * RING_EDGE_PAD
+        if diameter <= 0:
+            return
+
+        pen_width = min(
+            RING_PEN_MAX,
+            max(RING_PEN_MIN, diameter * RING_PEN_RATIO),
+        )
+        radius = (diameter - pen_width) / 2
+        cx = self.width() / 2
+        cy = self.height() / 2
+
+        palette = QApplication.palette()
+        track_color = palette.color(QPalette.Window).lighter(RING_TRACK_LIGHTEN)
+        head_color = palette.color(QPalette.WindowText)
+
+        painter.setPen(QPen(track_color, pen_width))
+        painter.drawEllipse(QPointF(cx, cy), radius, radius)
+
+        radians = math.radians(self.angle)
+        dot_radius = pen_width * RING_DOT_RATIO / 2
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(head_color)
+        painter.drawEllipse(
+            QPointF(
+                cx + radius * math.sin(radians),
+                cy - radius * math.cos(radians),
+            ),
+            dot_radius,
+            dot_radius,
+        )
 
 
 # --- Clock tab ---
