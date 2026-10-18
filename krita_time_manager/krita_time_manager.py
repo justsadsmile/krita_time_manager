@@ -12,8 +12,8 @@ from enum import Enum, auto
 from typing import Optional
 
 from PyQt5 import uic
-from PyQt5.QtCore import QDate, QLocale, QPointF, Qt, QTime, QTimer
-from PyQt5.QtGui import QPainter, QPalette, QPen
+from PyQt5.QtCore import QDate, QEvent, QLocale, QObject, QPointF, QSize, Qt, QTime, QTimer
+from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QPalette, QPen
 from PyQt5.QtWidgets import QApplication, QSizePolicy, QVBoxLayout, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
@@ -27,6 +27,13 @@ FINISHED_STYLE = "color: #e74c3c;"
 TIME_FORMAT = "hh:mm:ss"
 DATE_FORMAT = "dddd, dd MMMM yyyy"
 PANEL_DARKEN = 115
+ICON_PLAY = "animation_play"
+ICON_PAUSE = "animation_pause"
+ICON_RESET = "reload-preset"
+CLOCK_FONT_MIN = 14
+CLOCK_FONT_MAX = 60
+CLOCK_FONT_SIDE_PAD = 32
+CLOCK_FONT_V_PAD = 4
 
 SWEEP_PERIOD_S = 4.0
 RING_UPDATE_MS = 16
@@ -148,7 +155,7 @@ class SweepRing(QWidget):
 
 # --- Clock tab ---
 
-class ClockTab:
+class ClockTab(QObject):
     """Shows the current time and date, aligned to the second boundary.
     
     A one-shot precise timer re-arms itself on every tick, computing the
@@ -157,7 +164,18 @@ class ClockTab:
     #There are a lot of comments because I'm a little dumb
 
     def __init__(self, ui: QWidget) -> None:
+        super().__init__(ui)
         self.ui = ui
+
+        # Balance the bottom spacer so the clock block sits in the tab center
+        self.ui.clockTabLayout.insertStretch(0)
+
+        # Elastic clock: scale the font from the base size as the tab resizes
+        self.clock_font = QFont(self.ui.clockLabel.font())
+        self.clock_base_size = self.clock_font.pointSize()
+        self.clock_current_size = self.clock_base_size
+        self.ui.clockLabel.setMinimumSize(1, 1)
+        self.ui.clockTab.installEventFilter(self)
 
         # Always format dates in English, regardless of system locale
         self.locale = QLocale(QLocale.English)
@@ -171,6 +189,46 @@ class ClockTab:
         # Align the first tick to the next second boundary and render immediately
         self.schedule_next_tick()
         self.update()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.ui.clockTab and event.type() == QEvent.Resize:
+            self.fit_clock_font()
+        return super().eventFilter(obj, event)
+
+    def fit_clock_font(self) -> None:
+        """Scale the clock font to the tab size, bounded and width-driven."""
+        metrics = QFontMetrics(self.clock_font)
+        text_width = metrics.horizontalAdvance(self.ui.clockLabel.text())
+        text_height = metrics.height()
+        if text_width <= 0 or text_height <= 0:
+            return
+
+        margins = self.ui.clockTabLayout.contentsMargins()
+        spacing = self.ui.clockTabLayout.spacing()
+        avail_width = (
+            self.ui.clockTab.width()
+            - margins.left() - margins.right() - 2 * CLOCK_FONT_SIDE_PAD
+        )
+        avail_height = (
+            self.ui.clockTab.height()
+            - margins.top() - margins.bottom() - 2 * CLOCK_FONT_V_PAD
+            - self.ui.dateLabel.sizeHint().height() - 3 * spacing
+        )
+        if avail_width <= 0 or avail_height <= 0:
+            return
+
+        scale = min(avail_width / text_width, avail_height / text_height)
+        point_size = max(
+            CLOCK_FONT_MIN,
+            min(CLOCK_FONT_MAX, int(self.clock_base_size * scale)),
+        )
+        if point_size == self.clock_current_size:
+            return
+
+        font = QFont(self.clock_font)
+        font.setPointSize(point_size)
+        self.ui.clockLabel.setFont(font)
+        self.clock_current_size = point_size
 
     def on_tick(self) -> None:
         """Called once per second: refresh the display and schedule the next ring."""
@@ -203,6 +261,11 @@ class StopwatchTab:
 
         self.ui.swStartButton.clicked.connect(self.on_start_clicked)
         self.ui.swResetButton.clicked.connect(self.on_reset_clicked)
+
+        for button in (self.ui.swStartButton, self.ui.swResetButton):
+            button.setText("")
+            button.setIconSize(QSize(18, 18))
+        self.ui.swResetButton.setIcon(Krita.instance().icon(ICON_RESET))
 
         self.tick_timer = QTimer(self.ui)
         self.tick_timer.timeout.connect(self.update_display)
@@ -272,11 +335,14 @@ class StopwatchTab:
 
     def update_buttons(self) -> None:
         if self.state == StopwatchState.RUNNING:
-            self.ui.swStartButton.setText("Pause")
+            self.ui.swStartButton.setIcon(Krita.instance().icon(ICON_PAUSE))
+            self.ui.swStartButton.setToolTip("Pause")
         elif self.state == StopwatchState.PAUSED:
-            self.ui.swStartButton.setText("Resume")
+            self.ui.swStartButton.setIcon(Krita.instance().icon(ICON_PLAY))
+            self.ui.swStartButton.setToolTip("Resume")
         else:
-            self.ui.swStartButton.setText("Start")
+            self.ui.swStartButton.setIcon(Krita.instance().icon(ICON_PLAY))
+            self.ui.swStartButton.setToolTip("Start")
         self.ui.swResetButton.setEnabled(self.state != StopwatchState.STOPPED)
 
 
@@ -287,6 +353,10 @@ class TimerTab:
 
     def __init__(self, ui: QWidget) -> None:
         self.ui = ui
+
+        # Balance the bottom spacer so the timer block sits in the tab center
+        self.ui.timerTabLayout.insertStretch(0)
+
         self.state = TimerState.IDLE
         self.run_duration = 0.0
         self.deadline: Optional[float] = None
@@ -297,6 +367,11 @@ class TimerTab:
         self.ui.timerHoursSpin.valueChanged.connect(self.on_input_changed)
         self.ui.timerMinutesSpin.valueChanged.connect(self.on_input_changed)
         self.ui.timerSecondsSpin.valueChanged.connect(self.on_input_changed)
+
+        for button in (self.ui.timerStartButton, self.ui.timerResetButton):
+            button.setText("")
+            button.setIconSize(QSize(18, 18))
+        self.ui.timerResetButton.setIcon(Krita.instance().icon(ICON_RESET))
 
         self.tick_timer = QTimer(self.ui)
         self.tick_timer.timeout.connect(self.on_tick)
@@ -422,16 +497,20 @@ class TimerTab:
 
     def update_buttons(self) -> None:
         if self.state == TimerState.RUNNING:
-            self.ui.timerStartButton.setText("Pause")
+            self.ui.timerStartButton.setIcon(Krita.instance().icon(ICON_PAUSE))
+            self.ui.timerStartButton.setToolTip("Pause")
             self.ui.timerStartButton.setEnabled(True)
         elif self.state == TimerState.PAUSED:
-            self.ui.timerStartButton.setText("Resume")
+            self.ui.timerStartButton.setIcon(Krita.instance().icon(ICON_PLAY))
+            self.ui.timerStartButton.setToolTip("Resume")
             self.ui.timerStartButton.setEnabled(self.read_input() > 0)
         elif self.state == TimerState.FINISHED:
-            self.ui.timerStartButton.setText("Restart")
+            self.ui.timerStartButton.setIcon(Krita.instance().icon(ICON_PLAY))
+            self.ui.timerStartButton.setToolTip("Restart")
             self.ui.timerStartButton.setEnabled(True)
         else:
-            self.ui.timerStartButton.setText("Start")
+            self.ui.timerStartButton.setIcon(Krita.instance().icon(ICON_PLAY))
+            self.ui.timerStartButton.setToolTip("Start")
             self.ui.timerStartButton.setEnabled(self.read_input() > 0)
         self.ui.timerResetButton.setEnabled(self.state != TimerState.IDLE)
 
