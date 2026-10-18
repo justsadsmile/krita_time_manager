@@ -15,7 +15,7 @@ from typing import Optional
 from PyQt5 import uic
 from PyQt5.QtCore import QDate, QEvent, QLocale, QObject, QPointF, QSize, Qt, QTime, QTimer
 from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QPalette, QPen
-from PyQt5.QtWidgets import QApplication, QLineEdit, QSizePolicy, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
 
@@ -124,12 +124,37 @@ class SweepRing(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.angle = 0.0
+        self.overlay: Optional[QWidget] = None
+        self.overlay_ratio = 1.0
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def set_angle(self, angle: float) -> None:
         """Place the dot at the given angle: 0 = top, growing clockwise."""
         self.angle = angle % 360.0
         self.update()
+
+    def set_overlay(self, widget: QWidget, ratio: float = 1.0) -> None:
+        """Center widget over the ring; side = ratio of the drawn diameter."""
+        self.overlay = widget
+        self.overlay_ratio = ratio
+        self.place_overlay()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.place_overlay()
+
+    def place_overlay(self) -> None:
+        if self.overlay is None:
+            return
+        diameter = min(self.width(), self.height()) - 2 * RING_EDGE_PAD
+        side = max(0, int(diameter * self.overlay_ratio))
+        self.overlay.setGeometry(
+            (self.width() - side) // 2,
+            (self.height() - side) // 2,
+            side,
+            side,
+        )
+        self.overlay.raise_()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -296,6 +321,17 @@ class StopwatchTab:
         self.ring.setMinimumSize(side, side)
         self.ui.stopwatchTabLayout.insertWidget(0, self.ring)
         self.ui.stopwatchTabLayout.setStretch(0, 1)
+
+        # invis button
+        self.ring_button = QPushButton(self.ring)
+        self.ring_button.setStyleSheet(
+            "QPushButton { background: transparent; border: none; }"
+        )
+        self.ring_button.setFlat(True)
+        self.ring_button.setCursor(Qt.PointingHandCursor)
+        self.ring_button.setFocusPolicy(Qt.NoFocus)
+        self.ring_button.clicked.connect(self.on_start_clicked)
+        self.ring.set_overlay(self.ring_button, 1.0)
 
         self.ring_timer = QTimer(self.ui)
         self.ring_timer.timeout.connect(self.update_ring)
