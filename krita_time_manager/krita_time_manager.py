@@ -86,7 +86,7 @@ class ClockTab:
         self.locale = QLocale(QLocale.English)
 
         # One-shot precise timer: each timeout re-arms the next tick
-        self.tick_timer = QTimer()
+        self.tick_timer = QTimer(self.ui)
         self.tick_timer.setSingleShot(True)
         self.tick_timer.setTimerType(Qt.PreciseTimer)  # ~1 ms vs ~50 ms default
         self.tick_timer.timeout.connect(self.on_tick)
