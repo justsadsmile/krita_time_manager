@@ -9,12 +9,13 @@ import math
 import os
 import time
 from enum import Enum, auto
+from functools import partial
 from typing import Optional
 
 from PyQt5 import uic
 from PyQt5.QtCore import QDate, QEvent, QLocale, QObject, QPointF, QSize, Qt, QTime, QTimer
 from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QPalette, QPen
-from PyQt5.QtWidgets import QApplication, QSizePolicy, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QLineEdit, QSizePolicy, QVBoxLayout, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
 
@@ -34,6 +35,8 @@ CLOCK_FONT_MIN = 14
 CLOCK_FONT_MAX = 60
 CLOCK_FONT_SIDE_PAD = 32
 CLOCK_FONT_V_PAD = 4
+TIMER_DEFAULT_S = 300
+TIMER_MAX_S = 99 * 3600 + 59 * 60 + 59
 
 SWEEP_PERIOD_S = 4.0
 RING_UPDATE_MS = 16
@@ -71,6 +74,18 @@ def format_seconds(total: float) -> str:
     minutes = (total % 3600) // 60
     seconds = total % 60
     return "{:02d}:{:02d}:{:02d}".format(hours, minutes, seconds)
+
+
+def timer_digits_to_seconds(digits: str) -> int:
+    """Positional "hhmmss" digits -> seconds, carrying overflow upwards."""
+    return int(digits[0:2]) * 3600 + int(digits[2:4]) * 60 + int(digits[4:6])
+
+
+def seconds_to_timer_digits(total: int) -> str:
+    """Seconds -> positional 6-digit "hhmmss" string (the edit seed)."""
+    return "{:02d}{:02d}{:02d}".format(
+        total // 3600, total % 3600 // 60, total % 60
+    )
 
 
 def format_elapsed(total: float) -> str:
@@ -348,10 +363,11 @@ class StopwatchTab:
 
 # --- Timer tab ---
 
-class TimerTab:
-    """Counts time down. Start/Pause toggles; while paused the pending time can be edited."""
+class TimerTab(QObject):
+    """Counts time down. Start/Pause toggles; click the digits to type a duration."""
 
     def __init__(self, ui: QWidget) -> None:
+        super().__init__(ui)
         self.ui = ui
 
         # Balance the bottom spacer so the timer block sits in the tab center
@@ -361,39 +377,103 @@ class TimerTab:
         self.run_duration = 0.0
         self.deadline: Optional[float] = None
         self.paused_left: Optional[float] = None
+        self.duration = TIMER_DEFAULT_S
+        self.editing = False
+        self.edit_digits = ""
 
         self.ui.timerStartButton.clicked.connect(self.on_start_clicked)
         self.ui.timerResetButton.clicked.connect(self.on_reset_clicked)
-        self.ui.timerHoursSpin.valueChanged.connect(self.on_input_changed)
-        self.ui.timerMinutesSpin.valueChanged.connect(self.on_input_changed)
-        self.ui.timerSecondsSpin.valueChanged.connect(self.on_input_changed)
+        self.ui.timerPlus30Button.clicked.connect(partial(self.add_time, 30))
+        self.ui.timerPlus60Button.clicked.connect(partial(self.add_time, 60))
+        self.ui.timerPlus300Button.clicked.connect(partial(self.add_time, 300))
 
         for button in (self.ui.timerStartButton, self.ui.timerResetButton):
             button.setText("")
             button.setIconSize(QSize(18, 18))
         self.ui.timerResetButton.setIcon(Krita.instance().icon(ICON_RESET))
 
+        # Editor that appears in place of the big digits
+        self.editor = QLineEdit(self.ui.timerTab)
+        self.editor.setFont(QFont(self.ui.timerLabel.font()))
+        self.editor.setAlignment(Qt.AlignCenter)
+        self.editor.setVisible(False)
+        self.ui.timerTabLayout.insertWidget(2, self.editor)
+        self.ui.timerLabel.setToolTip("Click to edit")
+        self.ui.timerLabel.installEventFilter(self)
+        self.editor.installEventFilter(self)
+
         self.tick_timer = QTimer(self.ui)
         self.tick_timer.timeout.connect(self.on_tick)
 
         self.update_buttons()
-        self.update_input_visibility()
         self.update_display()
 
-    def read_input(self) -> int:
-        """Duration from the spinboxes, in seconds."""
-        return (self.ui.timerHoursSpin.value() * 3600 +
-                self.ui.timerMinutesSpin.value() * 60 +
-                self.ui.timerSecondsSpin.value())
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.ui.timerLabel and event.type() == QEvent.MouseButtonPress:
+            self.begin_edit()
+        elif obj is self.editor:
+            if event.type() == QEvent.KeyPress:
+                return self.on_edit_key(event)
+            if event.type() == QEvent.FocusOut and self.editing:
+                self.end_edit(True)
+        return super().eventFilter(obj, event)
 
-    def set_input(self, total: int) -> None:
-        """Write whole seconds back into the spinboxes."""
-        total = min(total, 99 * 3600 + 59 * 60 + 59)
-        hours, rest = divmod(total, 3600)
-        minutes, seconds = divmod(rest, 60)
-        self.ui.timerHoursSpin.setValue(hours)
-        self.ui.timerMinutesSpin.setValue(minutes)
-        self.ui.timerSecondsSpin.setValue(seconds)
+    def on_edit_key(self, event) -> bool:
+        key = event.key()
+        if key == Qt.Key_Escape:
+            self.end_edit(False)
+            return True
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            self.end_edit(True)
+            return True
+        if key == Qt.Key_Backspace:
+            self.edit_digits = "0" + self.edit_digits[:-1]
+            self.refresh_editor()
+            return True
+        if Qt.Key_0 <= key <= Qt.Key_9:
+            self.edit_digits = self.edit_digits[1:] + str(key - Qt.Key_0)
+            self.refresh_editor()
+            return True
+        return False
+
+    def refresh_editor(self) -> None:
+        text = "{}:{}:{}".format(
+            self.edit_digits[0:2], self.edit_digits[2:4], self.edit_digits[4:6]
+        )
+        self.editor.setText(text)
+        self.editor.setCursorPosition(len(text))
+
+    def begin_edit(self) -> None:
+        if self.state not in (TimerState.IDLE, TimerState.PAUSED):
+            return
+        self.editing = True
+        self.edit_digits = seconds_to_timer_digits(int(self.duration))
+        self.refresh_editor()
+        self.ui.timerLabel.setVisible(False)
+        self.editor.setVisible(True)
+        self.editor.setFocus()
+
+    def end_edit(self, commit: bool) -> None:
+        if not self.editing:
+            return
+        self.editing = False
+        self.editor.setVisible(False)
+        self.ui.timerLabel.setVisible(True)
+        if commit:
+            self.duration = min(TIMER_MAX_S, timer_digits_to_seconds(self.edit_digits))
+            self.update_buttons()
+        self.update_display()
+
+    def add_time(self, delta: int) -> None:
+        if self.state not in (TimerState.IDLE, TimerState.PAUSED):
+            return
+        if self.state == TimerState.PAUSED and self.paused_left is not None:
+            self.paused_left = min(float(TIMER_MAX_S), self.paused_left + delta)
+            self.duration = math.ceil(self.paused_left)
+        else:
+            self.duration = min(TIMER_MAX_S, self.duration + delta)
+        self.update_buttons()
+        self.update_display()
 
     def seconds_left(self) -> float:
         """Seconds left in the current state."""
@@ -401,7 +481,7 @@ class TimerTab:
             return max(0.0, self.deadline - time.perf_counter())
         if self.state == TimerState.FINISHED:
             return 0.0
-        return float(self.read_input())
+        return float(self.duration)
 
     def on_start_clicked(self) -> None:
         if self.state == TimerState.RUNNING:
@@ -410,18 +490,18 @@ class TimerTab:
                 self.on_finished()
                 return
             self.paused_left = left
-            self.set_input(math.ceil(left))
+            self.duration = math.ceil(left)
             self.deadline = None
             self.state = TimerState.PAUSED
         elif self.state == TimerState.IDLE:
-            duration = self.read_input()
+            duration = self.duration
             if duration <= 0:
                 return
             self.run_duration = float(duration)
             self.deadline = time.perf_counter() + duration
             self.state = TimerState.RUNNING
         elif self.state == TimerState.PAUSED:
-            duration = self.read_input()
+            duration = self.duration
             if (self.paused_left is not None
                     and duration == math.ceil(self.paused_left)):
                 duration = self.paused_left
@@ -439,7 +519,6 @@ class TimerTab:
             return
         self.sync_tick_timer()
         self.update_buttons()
-        self.update_input_visibility()
         self.update_display()
 
     def on_reset_clicked(self) -> None:
@@ -449,7 +528,6 @@ class TimerTab:
         self.clear_finished_style()
         self.sync_tick_timer()
         self.update_buttons()
-        self.update_input_visibility()
         self.update_display()
 
     def on_tick(self) -> None:
@@ -465,15 +543,9 @@ class TimerTab:
         self.state = TimerState.FINISHED
         self.sync_tick_timer()
         self.update_buttons()
-        self.update_input_visibility()
         QApplication.beep()
         self.ui.timerLabel.setStyleSheet(FINISHED_STYLE)
         self.update_display()
-
-    def on_input_changed(self, _value: int) -> None:
-        if self.state in (TimerState.IDLE, TimerState.PAUSED):
-            self.update_buttons()
-            self.update_display()
 
     def clear_finished_style(self) -> None:
         self.ui.timerLabel.setStyleSheet("")
@@ -484,13 +556,6 @@ class TimerTab:
             self.tick_timer.start(UI_TICK_MS)
         else:
             self.tick_timer.stop()
-
-    def update_input_visibility(self) -> None:
-        """Spinboxes are editable only in IDLE and PAUSED."""
-        visible = self.state in (TimerState.IDLE, TimerState.PAUSED)
-        self.ui.timerHoursSpin.setVisible(visible)
-        self.ui.timerMinutesSpin.setVisible(visible)
-        self.ui.timerSecondsSpin.setVisible(visible)
 
     def update_display(self) -> None:
         self.ui.timerLabel.setText(format_seconds(math.ceil(self.seconds_left())))
@@ -503,7 +568,7 @@ class TimerTab:
         elif self.state == TimerState.PAUSED:
             self.ui.timerStartButton.setIcon(Krita.instance().icon(ICON_PLAY))
             self.ui.timerStartButton.setToolTip("Resume")
-            self.ui.timerStartButton.setEnabled(self.read_input() > 0)
+            self.ui.timerStartButton.setEnabled(self.duration > 0)
         elif self.state == TimerState.FINISHED:
             self.ui.timerStartButton.setIcon(Krita.instance().icon(ICON_PLAY))
             self.ui.timerStartButton.setToolTip("Restart")
@@ -511,7 +576,12 @@ class TimerTab:
         else:
             self.ui.timerStartButton.setIcon(Krita.instance().icon(ICON_PLAY))
             self.ui.timerStartButton.setToolTip("Start")
-            self.ui.timerStartButton.setEnabled(self.read_input() > 0)
+            self.ui.timerStartButton.setEnabled(self.duration > 0)
+        editable = self.state in (TimerState.IDLE, TimerState.PAUSED)
+        for button in (self.ui.timerPlus30Button, self.ui.timerPlus60Button,
+                       self.ui.timerPlus300Button):
+            button.setEnabled(editable)
+        self.ui.timerLabel.setCursor(Qt.IBeamCursor if editable else Qt.ArrowCursor)
         self.ui.timerResetButton.setEnabled(self.state != TimerState.IDLE)
 
 
