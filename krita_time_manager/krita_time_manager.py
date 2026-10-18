@@ -14,7 +14,7 @@ from typing import Optional
 from PyQt5 import uic
 from PyQt5.QtCore import QDate, QLocale, QPointF, Qt, QTime, QTimer
 from PyQt5.QtGui import QPainter, QPalette, QPen
-from PyQt5.QtWidgets import QApplication, QSizePolicy, QWidget
+from PyQt5.QtWidgets import QApplication, QSizePolicy, QVBoxLayout, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
 
@@ -206,6 +206,21 @@ class StopwatchTab:
         self.tick_timer = QTimer(self.ui)
         self.tick_timer.timeout.connect(self.update_display)
 
+        self.ring = SweepRing(self.ui.stopwatchTab)
+        ring_layout = QVBoxLayout(self.ring)
+        ring_layout.setContentsMargins(
+            RING_TEXT_PAD, RING_TEXT_PAD, RING_TEXT_PAD, RING_TEXT_PAD
+        )
+        ring_layout.addWidget(self.ui.stopwatchLabel)
+        label_size = self.ui.stopwatchLabel.sizeHint()
+        side = max(label_size.width(), label_size.height()) + 2 * RING_TEXT_PAD
+        self.ring.setMinimumSize(side, side)
+        self.ui.stopwatchTabLayout.insertWidget(0, self.ring)
+        self.ui.stopwatchTabLayout.setStretch(0, 1)
+
+        self.ring_timer = QTimer(self.ui)
+        self.ring_timer.timeout.connect(self.update_ring)
+
         self.update_buttons()
         self.update_display()
 
@@ -234,16 +249,25 @@ class StopwatchTab:
         self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
+        self.update_ring()
 
     def sync_tick_timer(self) -> None:
         """Repaint only while counting; on pause/stop the display is frozen."""
         if self.state == StopwatchState.RUNNING:
             self.tick_timer.start(UI_TICK_MS)
+            self.ring_timer.start(RING_UPDATE_MS)
         else:
             self.tick_timer.stop()
+            self.ring_timer.stop()
 
     def update_display(self) -> None:
         self.ui.stopwatchLabel.setText(format_elapsed(self.elapsed()))
+
+    def update_ring(self) -> None:
+        """Dot angle from elapsed time: 5 s per revolution, drift-free."""
+        self.ring.set_angle(
+            self.elapsed() % SWEEP_PERIOD_S / SWEEP_PERIOD_S * 360.0
+        )
 
     def update_buttons(self) -> None:
         if self.state == StopwatchState.RUNNING:
