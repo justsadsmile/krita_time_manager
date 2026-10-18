@@ -31,6 +31,7 @@ PANEL_DARKEN = 115
 SWEEP_PERIOD_S = 4.0
 RING_UPDATE_MS = 16
 RING_TRACK_LIGHTEN = 125
+RING_HEAD_DARKEN = 120
 RING_EDGE_PAD = 4
 RING_TEXT_PAD = 20
 RING_PEN_RATIO = 0.05
@@ -126,7 +127,7 @@ class SweepRing(QWidget):
 
         palette = QApplication.palette()
         track_color = palette.color(QPalette.Window).lighter(RING_TRACK_LIGHTEN)
-        head_color = palette.color(QPalette.WindowText)
+        head_color = palette.color(QPalette.WindowText).darker(RING_HEAD_DARKEN)
 
         painter.setPen(QPen(track_color, pen_width))
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
