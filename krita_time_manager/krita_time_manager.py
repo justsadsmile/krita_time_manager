@@ -22,8 +22,7 @@ from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
 
 CLOCK_UPDATE_MS = 1000 # MUST stay 1000 !!! DO NOT MAKE CHANGES WITHOUT MODIFYING class ClockTab:
 UI_TICK_MS = 100
-BLINK_INTERVAL_MS = 500
-BLINK_STYLE = "color: #e74c3c;"
+FINISHED_STYLE = "color: #e74c3c;"
 TIME_FORMAT = "hh:mm:ss"
 DATE_FORMAT = "dddd, dd MMMM yyyy"
 
@@ -190,16 +189,13 @@ class TimerTab:
         self.state = TimerState.IDLE
         self.run_duration = 0.0
         self.deadline: Optional[float] = None
-        self.blink_on = False
+        self.paused_left: Optional[float] = None
 
         self.ui.timerStartButton.clicked.connect(self.on_start_clicked)
         self.ui.timerResetButton.clicked.connect(self.on_reset_clicked)
         self.ui.timerHoursSpin.valueChanged.connect(self.on_input_changed)
         self.ui.timerMinutesSpin.valueChanged.connect(self.on_input_changed)
         self.ui.timerSecondsSpin.valueChanged.connect(self.on_input_changed)
-
-        self.blink_timer = QTimer(self.ui)
-        self.blink_timer.timeout.connect(self.on_blink)
 
         self.tick_timer = QTimer(self.ui)
         self.tick_timer.timeout.connect(self.on_tick)
@@ -237,6 +233,7 @@ class TimerTab:
             if left <= 0:
                 self.on_finished()
                 return
+            self.paused_left = left
             self.set_input(math.ceil(left))
             self.deadline = None
             self.state = TimerState.PAUSED
@@ -249,13 +246,17 @@ class TimerTab:
             self.state = TimerState.RUNNING
         elif self.state == TimerState.PAUSED:
             duration = self.read_input()
+            if (self.paused_left is not None
+                    and duration == math.ceil(self.paused_left)):
+                duration = self.paused_left
+            self.paused_left = None
             if duration <= 0:
                 return
             self.run_duration = float(duration)
             self.deadline = time.perf_counter() + duration
             self.state = TimerState.RUNNING
         elif self.state == TimerState.FINISHED:
-            self.stop_blinking()
+            self.clear_finished_style()
             self.deadline = time.perf_counter() + self.run_duration
             self.state = TimerState.RUNNING
         else:
@@ -267,8 +268,9 @@ class TimerTab:
 
     def on_reset_clicked(self) -> None:
         self.deadline = None
+        self.paused_left = None
         self.state = TimerState.IDLE
-        self.stop_blinking()
+        self.clear_finished_style()
         self.sync_tick_timer()
         self.update_buttons()
         self.update_input_visibility()
@@ -283,12 +285,13 @@ class TimerTab:
 
     def on_finished(self) -> None:
         self.deadline = None
+        self.paused_left = None
         self.state = TimerState.FINISHED
         self.sync_tick_timer()
         self.update_buttons()
         self.update_input_visibility()
         QApplication.beep()
-        self.blink_timer.start(BLINK_INTERVAL_MS)
+        self.ui.timerLabel.setStyleSheet(FINISHED_STYLE)
         self.update_display()
 
     def on_input_changed(self, _value: int) -> None:
@@ -296,16 +299,7 @@ class TimerTab:
             self.update_buttons()
             self.update_display()
 
-    def on_blink(self) -> None:
-        self.blink_on = not self.blink_on
-        if self.blink_on:
-            self.ui.timerLabel.setStyleSheet(BLINK_STYLE)
-        else:
-            self.ui.timerLabel.setStyleSheet("")
-
-    def stop_blinking(self) -> None:
-        self.blink_timer.stop()
-        self.blink_on = False
+    def clear_finished_style(self) -> None:
         self.ui.timerLabel.setStyleSheet("")
 
     def sync_tick_timer(self) -> None:
