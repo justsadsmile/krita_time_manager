@@ -19,10 +19,16 @@
      <property name="currentIndex">
       <number>0</number>
      </property>
-     <widget class="QWidget" name="clockTab">
-      <attribute name="title">
-       <string>Clock</string>
-      </attribute>
+      <widget class="QFrame" name="clockTab">
+       <property name="frameShape">
+        <enum>QFrame::StyledPanel</enum>
+       </property>
+       <property name="frameShadow">
+        <enum>QFrame::Sunken</enum>
+       </property>
+       <attribute name="title">
+        <string>Clock</string>
+       </attribute>
       <layout class="QVBoxLayout" name="clockTabLayout">
        <item>
         <widget class="QLabel" name="clockLabel">
@@ -66,10 +72,16 @@
        </item>
       </layout>
      </widget>
-     <widget class="QWidget" name="stopwatchTab">
-      <attribute name="title">
-       <string>Stopwatch</string>
-      </attribute>
+      <widget class="QFrame" name="stopwatchTab">
+       <property name="frameShape">
+        <enum>QFrame::StyledPanel</enum>
+       </property>
+       <property name="frameShadow">
+        <enum>QFrame::Sunken</enum>
+       </property>
+       <attribute name="title">
+        <string>Stopwatch</string>
+       </attribute>
       <layout class="QVBoxLayout" name="stopwatchTabLayout">
        <item>
         <widget class="QLabel" name="stopwatchLabel">
@@ -121,10 +133,16 @@
        </item>
       </layout>
      </widget>
-     <widget class="QWidget" name="timerTab">
-      <attribute name="title">
-       <string>Timer</string>
-      </attribute>
+      <widget class="QFrame" name="timerTab">
+       <property name="frameShape">
+        <enum>QFrame::StyledPanel</enum>
+       </property>
+       <property name="frameShadow">
+        <enum>QFrame::Sunken</enum>
+       </property>
+       <attribute name="title">
+        <string>Timer</string>
+       </attribute>
       <layout class="QVBoxLayout" name="timerTabLayout">
        <item>
         <widget class="QLabel" name="timerLabel">

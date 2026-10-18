@@ -13,6 +13,7 @@ from typing import Optional
 
 from PyQt5 import uic
 from PyQt5.QtCore import QDate, QLocale, Qt, QTime, QTimer
+from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
@@ -25,6 +26,7 @@ UI_TICK_MS = 100
 FINISHED_STYLE = "color: #e74c3c;"
 TIME_FORMAT = "hh:mm:ss"
 DATE_FORMAT = "dddd, dd MMMM yyyy"
+PANEL_DARKEN = 115
 
 
 # --- Enums ---
@@ -67,6 +69,18 @@ def format_elapsed(total: float) -> str:
     if minutes:
         return "{}:{:02d}.{}".format(minutes, seconds, tenth)
     return "{}.{}".format(seconds, tenth)
+
+
+def style_panels(ui: QWidget) -> None:
+    """Give each tab page an inset "window" look (theme-aware)."""
+    for page in (ui.clockTab, ui.stopwatchTab, ui.timerTab):
+        palette = page.palette()
+        palette.setColor(
+            QPalette.Window,
+            palette.color(QPalette.Window).darker(PANEL_DARKEN),
+        )
+        page.setPalette(palette)
+        page.setAutoFillBackground(True)
 
 
 # --- Clock tab ---
@@ -351,6 +365,7 @@ class TimeManager(DockWidget):
         )
         uic.loadUi(ui_path, self.widget)
         self.setWidget(self.widget)
+        style_panels(self.widget)
 
         self.clock = ClockTab(self.widget)
         self.stopwatch = StopwatchTab(self.widget)
