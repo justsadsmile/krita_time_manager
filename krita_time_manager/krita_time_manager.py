@@ -15,7 +15,7 @@ from typing import Optional
 from PyQt5 import uic
 from PyQt5.QtCore import QDate, QEvent, QLocale, QObject, QPointF, QSize, Qt, QTime, QTimer
 from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QPalette, QPen
-from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QLineEdit, QProgressBar, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
 
@@ -438,6 +438,12 @@ class TimerTab(QObject):
         self.ui.timerLabel.installEventFilter(self)
         self.editor.installEventFilter(self)
 
+        self.progress = QProgressBar(self.ui.timerTab)
+        self.progress.setRange(0, 1000)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(8)
+        self.ui.timerTabLayout.insertWidget(3, self.progress)
+
         self.tick_timer = QTimer(self.ui)
         self.tick_timer.timeout.connect(self.on_tick)
 
@@ -595,6 +601,12 @@ class TimerTab(QObject):
 
     def update_display(self) -> None:
         self.ui.timerLabel.setText(format_seconds(math.ceil(self.seconds_left())))
+        total = float(self.duration) if self.state == TimerState.IDLE else self.run_duration
+        if total <= 0:
+            self.progress.setValue(0)
+            return
+        value = int(self.seconds_left() / total * 1000)
+        self.progress.setValue(max(0, min(1000, value)))
 
     def update_buttons(self) -> None:
         if self.state == TimerState.RUNNING:
