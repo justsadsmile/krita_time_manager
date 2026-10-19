@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt5 import uic
-from PyQt5.QtCore import QDate, QEvent, QLocale, QObject, QPointF, QRectF, QSize, Qt, QTime, QTimer
+from PyQt5.QtCore import QDate, QEvent, QLocale, QObject, QPointF, QRectF, QSize, Qt, QTime, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
@@ -38,6 +38,10 @@ CLOCK_FONT_V_PAD = 4
 TIMER_DEFAULT_S = 300
 TIMER_MAX_S = 99 * 3600 + 59 * 60 + 59
 TIMER_PROGRESS_HEIGHT = 12
+TIMER_NOTIFY_REPEAT_MS = 1500
+TIMER_NOTIFY_BACKGROUND_REPEATS = 3
+TIMER_NOTIFY_TIMEOUT_MS = 4000
+TIMER_NOTIFY_PRIORITY = 2
 
 SWEEP_PERIOD_S = 4.0
 RING_UPDATE_MS = 16
@@ -109,6 +113,11 @@ def style_panels(ui: QWidget) -> None:
     for page in (ui.clockTab, ui.stopwatchTab, ui.timerTab):
         page.setPalette(theme.inset_palette(palette))
         page.setAutoFillBackground(True)
+
+
+def play_finish_sound() -> None:
+    """Play the timer finish sound (the Qt beep for now)."""
+    QApplication.beep()
 
 
 # --- Sweep ring ---
@@ -485,6 +494,8 @@ class StopwatchTab(QObject):
 class TimerTab(QObject):
     """Counts time down. Start/Pause toggles; click the digits to type a duration."""
 
+    timer_finished = pyqtSignal()
+
     def __init__(self, ui: QWidget) -> None:
         super().__init__(ui)
         self.ui = ui
@@ -678,9 +689,9 @@ class TimerTab(QObject):
         self.state = TimerState.FINISHED
         self.sync_tick_timer()
         self.update_buttons()
-        QApplication.beep()
         self.update_state_color()
         self.update_display()
+        self.timer_finished.emit()
 
     def sync_tick_timer(self) -> None:
         """Repaint only while counting; on pause/finish the display is static."""
@@ -759,6 +770,19 @@ class TimeManager(DockWidget):
         self.stopwatch = StopwatchTab(self.widget)
         self.timer = TimerTab(self.widget)
 
+        self.notify_timer = QTimer(self)
+        self.notify_timer.setSingleShot(True)
+        self.notify_timer.timeout.connect(self._notify_next)
+        self.notify_left = 0
+        self.notify_total = 0
+        self.pending_finish_message = False
+        self.timer.timer_finished.connect(self._on_timer_finished)
+
+        app = QApplication.instance()
+        state_changed = getattr(app, "applicationStateChanged", None)
+        if state_changed is not None:
+            state_changed.connect(self._on_app_state_changed)
+
         self._ready = True
         self.apply_theme()
         self._watch_theme()
@@ -799,6 +823,52 @@ class TimeManager(DockWidget):
         if window is None or not hasattr(window, 'themeChanged'):
             return
         window.themeChanged.connect(self.apply_theme)
+
+    def _app_is_active(self) -> bool:
+        return QApplication.applicationState() == Qt.ApplicationActive
+
+    def _on_timer_finished(self) -> None:
+        self.notify_timer.stop()
+        active = self._app_is_active()
+        self.notify_total = 1 if active else TIMER_NOTIFY_BACKGROUND_REPEATS
+        self.notify_left = self.notify_total
+        self.pending_finish_message = not active
+        if active:
+            self._show_finished_message()
+        self._notify_next()
+
+    def _notify_next(self) -> None:
+        if self.notify_left <= 0:
+            return
+        if self.notify_left < self.notify_total and self._app_is_active():
+            self.notify_left = 0
+            return
+        play_finish_sound()
+        self.notify_left -= 1
+        if self.notify_left > 0:
+            self.notify_timer.start(TIMER_NOTIFY_REPEAT_MS)
+
+    def _on_app_state_changed(self, state) -> None:
+        if state != Qt.ApplicationActive:
+            return
+        if self.notify_left > 0:
+            self.notify_timer.stop()
+            self.notify_left = 0
+        if self.pending_finish_message:
+            self.pending_finish_message = False
+            self._show_finished_message()
+
+    def _show_finished_message(self) -> None:
+        window = Krita.instance().activeWindow()
+        view = window.activeView() if window is not None else None
+        if view is None:
+            return
+        view.showFloatingMessage(
+            "Timer finished",
+            Krita.instance().icon("dialog-information"),
+            TIMER_NOTIFY_TIMEOUT_MS,
+            TIMER_NOTIFY_PRIORITY,
+        )
 
     def canvasChanged(self, canvas) -> None:
         pass
