@@ -388,6 +388,10 @@ class StopwatchTab(QObject):
                 theme.label_style(color(self.ui.stopwatchLabel))
             )
 
+    def apply_theme(self) -> None:
+        self.update_label_color()
+        self.ring.update()
+
     def update_ring(self) -> None:
         """Dot angle from elapsed time: SWEEP_PERIOD_S seconds per revolution."""
         self.ring.set_angle(
@@ -630,6 +634,9 @@ class TimerTab(QObject):
                 theme.label_style(color(self.ui.timerLabel))
             )
 
+    def apply_theme(self) -> None:
+        self.update_label_color()
+
     def update_buttons(self) -> None:
         if self.state == TimerState.RUNNING:
             self.ui.timerStartButton.setIcon(Krita.instance().icon(ICON_PAUSE))
@@ -660,6 +667,9 @@ class TimerTab(QObject):
 class TimeManager(DockWidget):
     """Docker that assembles the three tabs."""
 
+    _applying_theme = False
+    _ready = False
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Krita Time Manager")
@@ -668,11 +678,51 @@ class TimeManager(DockWidget):
         ui_path = Path(__file__).resolve().parent / 'krita_time_manager.ui'
         uic.loadUi(str(ui_path), self.widget)
         self.setWidget(self.widget)
-        style_panels(self.widget)
 
         self.clock = ClockTab(self.widget)
         self.stopwatch = StopwatchTab(self.widget)
         self.timer = TimerTab(self.widget)
+
+        self._ready = True
+        self.apply_theme()
+        self._watch_theme()
+
+    def apply_theme(self) -> None:
+        """Re-apply palette-derived colors after a theme change."""
+        if self._applying_theme:
+            return
+        self._applying_theme = True
+        try:
+            style_panels(self.widget)
+            self.stopwatch.apply_theme()
+            self.timer.apply_theme()
+        finally:
+            self._applying_theme = False
+
+    def changeEvent(self, event) -> None:
+        if event.type() == QEvent.PaletteChange and self._ready:
+            self.apply_theme()
+        super().changeEvent(event)
+
+    def _watch_theme(self) -> None:
+        notifier = Krita.instance().notifier()
+        window_creating = getattr(notifier, 'windowIsBeingCreated', None)
+        if window_creating is not None:
+            window_creating.connect(self._watch_window)
+        else:
+            window_created = getattr(notifier, 'windowCreated', None)
+            if window_created is not None:
+                window_created.connect(self._watch_all_windows)
+        self._watch_all_windows()
+
+    def _watch_all_windows(self) -> None:
+        for window in Krita.instance().windows():
+            self._watch_window(window)
+
+    def _watch_window(self, window) -> None:
+        if window is None or not hasattr(window, 'themeChanged'):
+            return
+        window.themeChanged.connect(self.apply_theme)
 
     def canvasChanged(self, canvas) -> None:
         pass
