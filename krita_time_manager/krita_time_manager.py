@@ -332,6 +332,7 @@ class StopwatchTab(QObject):
 
         self.update_buttons()
         self.update_display()
+        self.update_label_color()
 
     def elapsed(self) -> float:
         """Elapsed seconds, computed from the monotonic clock."""
@@ -350,6 +351,7 @@ class StopwatchTab(QObject):
         self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
+        self.update_label_color()
 
     def on_reset_clicked(self) -> None:
         self.accumulated = 0.0
@@ -358,6 +360,7 @@ class StopwatchTab(QObject):
         self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
+        self.update_label_color()
         self.update_ring()
 
     def sync_tick_timer(self) -> None:
@@ -371,6 +374,19 @@ class StopwatchTab(QObject):
 
     def update_display(self) -> None:
         self.ui.stopwatchLabel.setText(format_elapsed(self.elapsed()))
+
+    def update_label_color(self) -> None:
+        colors = {
+            StopwatchState.RUNNING: theme.success,
+            StopwatchState.PAUSED: theme.warning,
+        }
+        color = colors.get(self.state)
+        if color is None:
+            self.ui.stopwatchLabel.setStyleSheet("")
+        else:
+            self.ui.stopwatchLabel.setStyleSheet(
+                theme.label_style(color(self.ui.stopwatchLabel))
+            )
 
     def update_ring(self) -> None:
         """Dot angle from elapsed time: SWEEP_PERIOD_S seconds per revolution."""
@@ -443,6 +459,7 @@ class TimerTab(QObject):
 
         self.update_buttons()
         self.update_display()
+        self.update_label_color()
 
     def eventFilter(self, obj, event) -> bool:
         if obj is self.ui.timerLabel and event.type() == QEvent.MouseButtonPress:
@@ -548,7 +565,6 @@ class TimerTab(QObject):
             self.deadline = time.perf_counter() + duration
             self.state = TimerState.RUNNING
         elif self.state == TimerState.FINISHED:
-            self.clear_finished_style()
             self.deadline = time.perf_counter() + self.run_duration
             self.state = TimerState.RUNNING
         else:
@@ -556,15 +572,16 @@ class TimerTab(QObject):
         self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
+        self.update_label_color()
 
     def on_reset_clicked(self) -> None:
         self.deadline = None
         self.paused_left = None
         self.state = TimerState.IDLE
-        self.clear_finished_style()
         self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
+        self.update_label_color()
 
     def on_tick(self) -> None:
         if (self.state == TimerState.RUNNING
@@ -580,13 +597,8 @@ class TimerTab(QObject):
         self.sync_tick_timer()
         self.update_buttons()
         QApplication.beep()
-        self.ui.timerLabel.setStyleSheet(
-            theme.label_style(theme.danger(self.ui.timerLabel))
-        )
+        self.update_label_color()
         self.update_display()
-
-    def clear_finished_style(self) -> None:
-        self.ui.timerLabel.setStyleSheet("")
 
     def sync_tick_timer(self) -> None:
         """Repaint only while counting; on pause/finish the display is static."""
@@ -603,6 +615,20 @@ class TimerTab(QObject):
             return
         value = int(self.seconds_left() / total * 1000)
         self.progress.setValue(max(0, min(1000, value)))
+
+    def update_label_color(self) -> None:
+        colors = {
+            TimerState.RUNNING: theme.success,
+            TimerState.PAUSED: theme.warning,
+            TimerState.FINISHED: theme.danger,
+        }
+        color = colors.get(self.state)
+        if color is None:
+            self.ui.timerLabel.setStyleSheet("")
+        else:
+            self.ui.timerLabel.setStyleSheet(
+                theme.label_style(color(self.ui.timerLabel))
+            )
 
     def update_buttons(self) -> None:
         if self.state == TimerState.RUNNING:
