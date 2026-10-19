@@ -11,13 +11,25 @@ from PyQt5.QtWidgets import QWidget
 PANEL_DARKEN = 115
 RING_TRACK_LIGHTEN = 125
 RING_HEAD_DARKEN = 120
+RING_TRACK_MIX = 15
 MIN_CONTRAST = 80
 CONTRAST_STEPS = 10
 CONTRAST_FACTOR = 115
+STATE_SATURATION_MIN = 150
 
 HUE_SUCCESS = 140
 HUE_WARNING = 45
 HUE_DANGER = 0
+
+
+def _mix(first: QColor, second: QColor, percent: int) -> QColor:
+    """Mix colors in RGB: percent of the first, remainder of the second."""
+    ratio = percent / 100
+    return QColor(
+        round(first.red() * ratio + second.red() * (1 - ratio)),
+        round(first.green() * ratio + second.green() * (1 - ratio)),
+        round(first.blue() * ratio + second.blue() * (1 - ratio)),
+    )
 
 
 def _ensure_contrast(color: QColor, background: QColor) -> QColor:
@@ -35,11 +47,12 @@ def _ensure_contrast(color: QColor, background: QColor) -> QColor:
 
 
 def _state_color(widget: QWidget, hue: int) -> QColor:
-    """Take the theme accent and shift only its hue."""
+    """Shade the semantic hue with the theme saturation and text brightness."""
     palette = widget.palette()
-    _, saturation, value, alpha = accent(widget).getHsv()
+    _, saturation, _, alpha = accent(widget).getHsv()
+    _, _, value, _ = palette.color(QPalette.WindowText).getHsv()
     color = QColor()
-    color.setHsv(hue, saturation, value, alpha)
+    color.setHsv(hue, max(saturation, STATE_SATURATION_MIN), value, alpha)
     return _ensure_contrast(color, palette.color(QPalette.Window))
 
 
@@ -68,9 +81,19 @@ def ring_track(widget: QWidget) -> QColor:
     return widget.palette().color(QPalette.Window).lighter(RING_TRACK_LIGHTEN)
 
 
+def ring_state_track(widget: QWidget, color: QColor) -> QColor:
+    """Muted state color, so the head stays the brightest element."""
+    return _mix(color, widget.palette().color(QPalette.Window), RING_TRACK_MIX)
+
+
 def ring_dot(widget: QWidget) -> QColor:
     """Dot color with contrast against the ring track."""
     return widget.palette().color(QPalette.WindowText).darker(RING_HEAD_DARKEN)
+
+
+def ring_state_head(widget: QWidget, color: QColor) -> QColor:
+    """Full-strength state color for the brightest ring element."""
+    return _ensure_contrast(color, widget.palette().color(QPalette.Window))
 
 
 def inset_palette(palette: QPalette) -> QPalette:
@@ -81,8 +104,3 @@ def inset_palette(palette: QPalette) -> QPalette:
         palette.color(QPalette.Window).darker(PANEL_DARKEN),
     )
     return result
-
-
-def label_style(color: QColor) -> str:
-    """Point stylesheet for a label colored with the given theme color."""
-    return "color: {};".format(color.name())

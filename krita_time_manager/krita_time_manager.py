@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt5 import uic
-from PyQt5.QtCore import QDate, QEvent, QLocale, QObject, QPointF, QSize, Qt, QTime, QTimer
-from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QPen
-from PyQt5.QtWidgets import QApplication, QLineEdit, QProgressBar, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PyQt5.QtCore import QDate, QEvent, QLocale, QObject, QPointF, QRectF, QSize, Qt, QTime, QTimer
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
 
@@ -37,6 +37,7 @@ CLOCK_FONT_SIDE_PAD = 32
 CLOCK_FONT_V_PAD = 4
 TIMER_DEFAULT_S = 300
 TIMER_MAX_S = 99 * 3600 + 59 * 60 + 59
+TIMER_PROGRESS_HEIGHT = 12
 
 SWEEP_PERIOD_S = 4.0
 RING_UPDATE_MS = 16
@@ -118,6 +119,9 @@ class SweepRing(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.angle = 0.0
+        self.state_color: Optional[QColor] = None
+        self.track_color: Optional[QColor] = None
+        self.head_color: Optional[QColor] = None
         self.overlay: Optional[QWidget] = None
         self.overlay_ratio = 1.0
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -125,6 +129,17 @@ class SweepRing(QWidget):
     def set_angle(self, angle: float) -> None:
         """Place the dot at the given angle: 0 = top, growing clockwise."""
         self.angle = angle % 360.0
+        self.update()
+
+    def set_state_color(self, color: Optional[QColor]) -> None:
+        """Tint the ring with a state color; None restores the theme colors."""
+        self.state_color = color
+        if color is None:
+            self.track_color = None
+            self.head_color = None
+        else:
+            self.track_color = theme.ring_state_track(self, color)
+            self.head_color = theme.ring_state_head(self, color)
         self.update()
 
     def set_overlay(self, widget: QWidget, ratio: float = 1.0) -> None:
@@ -166,8 +181,16 @@ class SweepRing(QWidget):
         cx = self.width() / 2
         cy = self.height() / 2
 
-        track_color = theme.ring_track(self)
-        head_color = theme.ring_dot(self)
+        track_color = (
+            theme.ring_track(self)
+            if self.track_color is None
+            else self.track_color
+        )
+        head_color = (
+            theme.ring_dot(self)
+            if self.head_color is None
+            else self.head_color
+        )
 
         painter.setPen(QPen(track_color, pen_width))
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
@@ -184,6 +207,57 @@ class SweepRing(QWidget):
             dot_radius,
             dot_radius,
         )
+
+
+# --- Progress bar ---
+
+class StateProgress(QWidget):
+    """Rounded progress bar tinted by the timer state."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.fraction = 1.0
+        self.finished = False
+        self.track_color = theme.ring_track(self)
+        self.chunk_color = theme.accent(self)
+        self.setFixedHeight(TIMER_PROGRESS_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def set_fraction(self, fraction: float) -> None:
+        self.fraction = max(0.0, min(1.0, fraction))
+        self.update()
+
+    def set_state(self, color: Optional[QColor], finished: bool = False) -> None:
+        """Recolor the bar; computed only on state and theme changes."""
+        self.finished = finished
+        if color is None:
+            self.track_color = theme.ring_track(self)
+            self.chunk_color = theme.accent(self)
+        else:
+            self.track_color = theme.ring_state_track(self, color)
+            self.chunk_color = theme.ring_state_head(self, color)
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+
+        radius = rect.height() / 2
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self.track_color)
+        painter.drawRoundedRect(rect, radius, radius)
+
+        fraction = 1.0 if self.finished else self.fraction
+        if fraction <= 0:
+            return
+        chunk = QRectF(rect)
+        chunk.setWidth(rect.width() * fraction)
+        chunk_radius = min(radius, chunk.width() / 2)
+        painter.setBrush(self.chunk_color)
+        painter.drawRoundedRect(chunk, chunk_radius, chunk_radius)
 
 
 # --- Clock tab ---
@@ -381,12 +455,7 @@ class StopwatchTab(QObject):
             StopwatchState.PAUSED: theme.warning,
         }
         color = colors.get(self.state)
-        if color is None:
-            self.ui.stopwatchLabel.setStyleSheet("")
-        else:
-            self.ui.stopwatchLabel.setStyleSheet(
-                theme.label_style(color(self.ui.stopwatchLabel))
-            )
+        self.ring.set_state_color(None if color is None else color(self.ring))
 
     def apply_theme(self) -> None:
         self.update_label_color()
@@ -452,10 +521,7 @@ class TimerTab(QObject):
         self.ui.timerLabel.installEventFilter(self)
         self.editor.installEventFilter(self)
 
-        self.progress = QProgressBar(self.ui.timerTab)
-        self.progress.setRange(0, 1000)
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(8)
+        self.progress = StateProgress(self.ui.timerTab)
         self.ui.timerTabLayout.insertWidget(3, self.progress)
 
         self.tick_timer = QTimer(self.ui)
@@ -463,7 +529,7 @@ class TimerTab(QObject):
 
         self.update_buttons()
         self.update_display()
-        self.update_label_color()
+        self.update_state_color()
 
     def eventFilter(self, obj, event) -> bool:
         if obj is self.ui.timerLabel and event.type() == QEvent.MouseButtonPress:
@@ -576,7 +642,7 @@ class TimerTab(QObject):
         self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
-        self.update_label_color()
+        self.update_state_color()
 
     def on_reset_clicked(self) -> None:
         self.deadline = None
@@ -585,7 +651,7 @@ class TimerTab(QObject):
         self.sync_tick_timer()
         self.update_buttons()
         self.update_display()
-        self.update_label_color()
+        self.update_state_color()
 
     def on_tick(self) -> None:
         if (self.state == TimerState.RUNNING
@@ -601,7 +667,7 @@ class TimerTab(QObject):
         self.sync_tick_timer()
         self.update_buttons()
         QApplication.beep()
-        self.update_label_color()
+        self.update_state_color()
         self.update_display()
 
     def sync_tick_timer(self) -> None:
@@ -615,27 +681,24 @@ class TimerTab(QObject):
         self.ui.timerLabel.setText(format_seconds(math.ceil(self.seconds_left())))
         total = float(self.duration) if self.state == TimerState.IDLE else self.run_duration
         if total <= 0:
-            self.progress.setValue(0)
+            self.progress.set_fraction(0.0)
             return
-        value = int(self.seconds_left() / total * 1000)
-        self.progress.setValue(max(0, min(1000, value)))
+        self.progress.set_fraction(self.seconds_left() / total)
 
-    def update_label_color(self) -> None:
+    def update_state_color(self) -> None:
         colors = {
             TimerState.RUNNING: theme.success,
             TimerState.PAUSED: theme.warning,
             TimerState.FINISHED: theme.danger,
         }
         color = colors.get(self.state)
-        if color is None:
-            self.ui.timerLabel.setStyleSheet("")
-        else:
-            self.ui.timerLabel.setStyleSheet(
-                theme.label_style(color(self.ui.timerLabel))
-            )
+        self.progress.set_state(
+            None if color is None else color(self.progress),
+            self.state == TimerState.FINISHED,
+        )
 
     def apply_theme(self) -> None:
-        self.update_label_color()
+        self.update_state_color()
 
     def update_buttons(self) -> None:
         if self.state == TimerState.RUNNING:
