@@ -6,10 +6,10 @@ Structure:
 """
 
 import math
-import os
 import time
 from enum import Enum, auto
 from functools import partial
+from pathlib import Path
 from typing import Optional
 
 from PyQt5 import uic
@@ -290,10 +290,11 @@ class ClockTab(QObject):
 
 # --- Stopwatch tab ---
 
-class StopwatchTab:
+class StopwatchTab(QObject):
     """Counts time up. Start/Pause toggles, Reset clears."""
 
     def __init__(self, ui: QWidget) -> None:
+        super().__init__(ui)
         self.ui = ui
         self.state = StopwatchState.STOPPED
         self.accumulated = 0.0
@@ -643,11 +644,8 @@ class TimeManager(DockWidget):
         self.setWindowTitle("Krita Time Manager")
 
         self.widget = QWidget(self)
-        ui_path = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)),
-            'krita_time_manager.ui'
-        )
-        uic.loadUi(ui_path, self.widget)
+        ui_path = Path(__file__).resolve().parent / 'krita_time_manager.ui'
+        uic.loadUi(str(ui_path), self.widget)
         self.setWidget(self.widget)
         style_panels(self.widget)
 
