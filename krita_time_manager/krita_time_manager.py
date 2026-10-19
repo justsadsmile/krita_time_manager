@@ -14,20 +14,20 @@ from typing import Optional
 
 from PyQt5 import uic
 from PyQt5.QtCore import QDate, QEvent, QLocale, QObject, QPointF, QSize, Qt, QTime, QTimer
-from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QPalette, QPen
+from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QPen
 from PyQt5.QtWidgets import QApplication, QLineEdit, QProgressBar, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from krita import DockWidget, DockWidgetFactory, DockWidgetFactoryBase, Krita
+
+from . import theme
 
 
 # --- Constants ---
 
 CLOCK_UPDATE_MS = 1000 # MUST stay 1000 !!! DO NOT MAKE CHANGES WITHOUT MODIFYING class ClockTab:
 UI_TICK_MS = 100
-FINISHED_STYLE = "color: #e74c3c;"
 TIME_FORMAT = "hh:mm:ss"
 DATE_FORMAT = "dddd, dd MMMM yyyy"
-PANEL_DARKEN = 115
 ICON_PLAY = "animation_play"
 ICON_PAUSE = "animation_pause"
 ICON_RESET = "reload-preset"
@@ -40,8 +40,6 @@ TIMER_MAX_S = 99 * 3600 + 59 * 60 + 59
 
 SWEEP_PERIOD_S = 4.0
 RING_UPDATE_MS = 16
-RING_TRACK_LIGHTEN = 125
-RING_HEAD_DARKEN = 120
 RING_EDGE_PAD = 4
 RING_TEXT_PAD = 20
 RING_PEN_RATIO = 0.05
@@ -106,13 +104,9 @@ def format_elapsed(total: float) -> str:
 
 def style_panels(ui: QWidget) -> None:
     """Give each tab page an inset "window" look (theme-aware)."""
+    palette = ui.palette()
     for page in (ui.clockTab, ui.stopwatchTab, ui.timerTab):
-        palette = page.palette()
-        palette.setColor(
-            QPalette.Window,
-            palette.color(QPalette.Window).darker(PANEL_DARKEN),
-        )
-        page.setPalette(palette)
+        page.setPalette(theme.inset_palette(palette))
         page.setAutoFillBackground(True)
 
 
@@ -172,9 +166,8 @@ class SweepRing(QWidget):
         cx = self.width() / 2
         cy = self.height() / 2
 
-        palette = QApplication.palette()
-        track_color = palette.color(QPalette.Window).lighter(RING_TRACK_LIGHTEN)
-        head_color = palette.color(QPalette.WindowText).darker(RING_HEAD_DARKEN)
+        track_color = theme.ring_track(self)
+        head_color = theme.ring_dot(self)
 
         painter.setPen(QPen(track_color, pen_width))
         painter.drawEllipse(QPointF(cx, cy), radius, radius)
@@ -587,7 +580,9 @@ class TimerTab(QObject):
         self.sync_tick_timer()
         self.update_buttons()
         QApplication.beep()
-        self.ui.timerLabel.setStyleSheet(FINISHED_STYLE)
+        self.ui.timerLabel.setStyleSheet(
+            theme.label_style(theme.danger(self.ui.timerLabel))
+        )
         self.update_display()
 
     def clear_finished_style(self) -> None:
