@@ -493,7 +493,6 @@ class TimerTab(QObject):
         self.ui.timerTabLayout.insertStretch(0)
 
         self.state = TimerState.IDLE
-        self.run_duration = 0.0
         self.deadline: Optional[float] = None
         self.paused_left: Optional[float] = None
         self.duration = TIMER_DEFAULT_S
@@ -570,7 +569,9 @@ class TimerTab(QObject):
         if self.state not in (TimerState.IDLE, TimerState.PAUSED):
             return
         self.editing = True
-        self.edit_digits = seconds_to_timer_digits(int(self.duration))
+        self.edit_digits = seconds_to_timer_digits(
+            math.ceil(self.seconds_left())
+        )
         self.refresh_editor()
         self.ui.timerLabel.setVisible(False)
         self.editor.setVisible(True)
@@ -583,18 +584,29 @@ class TimerTab(QObject):
         self.editor.setVisible(False)
         self.ui.timerLabel.setVisible(True)
         if commit:
-            self.duration = min(TIMER_MAX_S, timer_digits_to_seconds(self.edit_digits))
-            self.update_buttons()
+            duration = min(
+                TIMER_MAX_S,
+                timer_digits_to_seconds(self.edit_digits),
+            )
+            if duration != math.ceil(self.seconds_left()):
+                self.duration = duration
+                if self.state == TimerState.PAUSED:
+                    self.deadline = None
+                    self.paused_left = None
+                    self.state = TimerState.IDLE
+                self.update_buttons()
+                self.update_state_color()
         self.update_display()
 
     def add_time(self, delta: int) -> None:
         if self.state not in (TimerState.IDLE, TimerState.PAUSED):
             return
+        self.duration = min(TIMER_MAX_S, self.duration + delta)
         if self.state == TimerState.PAUSED and self.paused_left is not None:
-            self.paused_left = min(float(TIMER_MAX_S), self.paused_left + delta)
-            self.duration = math.ceil(self.paused_left)
-        else:
-            self.duration = min(TIMER_MAX_S, self.duration + delta)
+            self.paused_left = min(
+                float(TIMER_MAX_S),
+                self.paused_left + delta,
+            )
         self.update_buttons()
         self.update_display()
 
@@ -604,6 +616,8 @@ class TimerTab(QObject):
             return max(0.0, self.deadline - time.perf_counter())
         if self.state == TimerState.FINISHED:
             return 0.0
+        if self.state == TimerState.PAUSED and self.paused_left is not None:
+            return self.paused_left
         return float(self.duration)
 
     def on_start_clicked(self) -> None:
@@ -613,29 +627,27 @@ class TimerTab(QObject):
                 self.on_finished()
                 return
             self.paused_left = left
-            self.duration = math.ceil(left)
             self.deadline = None
             self.state = TimerState.PAUSED
         elif self.state == TimerState.IDLE:
-            duration = self.duration
-            if duration <= 0:
+            if self.duration <= 0:
                 return
-            self.run_duration = float(duration)
-            self.deadline = time.perf_counter() + duration
+            self.deadline = time.perf_counter() + self.duration
             self.state = TimerState.RUNNING
         elif self.state == TimerState.PAUSED:
-            duration = self.duration
-            if (self.paused_left is not None
-                    and duration == math.ceil(self.paused_left)):
-                duration = self.paused_left
-            self.paused_left = None
-            if duration <= 0:
+            left = (
+                self.paused_left
+                if self.paused_left is not None
+                else float(self.duration)
+            )
+            if left <= 0:
+                self.on_finished()
                 return
-            self.run_duration = float(duration)
-            self.deadline = time.perf_counter() + duration
+            self.paused_left = None
+            self.deadline = time.perf_counter() + left
             self.state = TimerState.RUNNING
         elif self.state == TimerState.FINISHED:
-            self.deadline = time.perf_counter() + self.run_duration
+            self.deadline = time.perf_counter() + self.duration
             self.state = TimerState.RUNNING
         else:
             return
@@ -678,12 +690,13 @@ class TimerTab(QObject):
             self.tick_timer.stop()
 
     def update_display(self) -> None:
-        self.ui.timerLabel.setText(format_seconds(math.ceil(self.seconds_left())))
-        total = float(self.duration) if self.state == TimerState.IDLE else self.run_duration
+        left = self.seconds_left()
+        self.ui.timerLabel.setText(format_seconds(math.ceil(left)))
+        total = float(self.duration)
         if total <= 0:
             self.progress.set_fraction(0.0)
             return
-        self.progress.set_fraction(self.seconds_left() / total)
+        self.progress.set_fraction(left / total)
 
     def update_state_color(self) -> None:
         colors = {
